@@ -13,7 +13,7 @@ fn main() {
     let device = burn::backend::wgpu::WgpuDevice::default();
     train::<MyAutodiffBackend>(
         "/kaggle/working/guide",
-        TrainingConfig::new(ModelConfig::new(10, 512), AdamConfig::new()),
+        TrainingConfig::new(ModelConfig::new(10, 512), AdamConfig::new()).with_num_workers(16),
         device,
     );
 }

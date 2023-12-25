@@ -1,10 +1,11 @@
+use std::fmt::format;
 use crate::data::{MNISTBatch, MNISTBatcher};
 use burn::data::dataloader::DataLoaderBuilder;
-use burn::data::dataset::source::huggingface::MNISTDataset;
+use burn::data::dataset::source::huggingface::{MNISTDataset, MNISTItem};
 use burn::module::AutodiffModule;
 use burn::nn::loss::CrossEntropyLoss;
 use burn::optim::{AdamConfig, Optimizer};
-use burn::record::CompactRecorder;
+use burn::record::{CompactRecorder, Recorder};
 use burn::train::metric::{AccuracyMetric, LossMetric};
 use burn::train::{ClassificationOutput, LearnerBuilder, TrainOutput, TrainStep, ValidStep};
 use burn::{
@@ -20,6 +21,8 @@ use burn::{
         Int, Tensor,
     },
 };
+use burn::data::dataloader::batcher::Batcher;
+use burn::tensor::Device;
 
 #[derive(Module, Debug)]
 pub struct Model<B: Backend> {
@@ -50,6 +53,18 @@ impl ModelConfig {
             linear1: LinearConfig::new(16 * 8 * 8, self.hidden_size).init(),
             linear2: LinearConfig::new(self.hidden_size, self.num_classes).init(),
             dropout: DropoutConfig::new(self.dropout).init(),
+        }
+    }
+
+    fn init_with<B: Backend>(&self, record: ModelRecord<B>) -> Model<B> {
+        Model {
+            conv1: Conv2dConfig::new([1, 8], [3, 3]).init_with(record.conv1),
+            conv2: Conv2dConfig::new([8, 16], [3, 3]).init_with(record.conv2),
+            pool: AdaptiveAvgPool2dConfig::new([8, 8]).init(),
+            activation: ReLU::new(),
+            linear1: LinearConfig::new(16*8*8, self.hidden_size).init_with(record.linear1),
+            linear2: LinearConfig::new(self.hidden_size, self.num_classes).init_with(record.linear2),
+            dropout: DropoutConfig::new(self.dropout).init()
         }
     }
 }
@@ -156,4 +171,19 @@ pub fn train<B: AutodiffBackend>(artifact_dir: &str, config: TrainingConfig, dev
     model_trained
         .save_file(format!("{artifact_dir}/model"), &CompactRecorder::new())
         .expect("Trained model should be saved successfully")
+}
+
+pub fn infer<B: Backend>(artifact_dir: &str, device: B::Device, item: MNISTItem) {
+    let config = TrainingConfig::load(format!("{artifact_dir}/config.json")).expect("Config should exist for the model");
+    let record = CompactRecorder::new().load(format!("{artifact_dir}/model").into()).expect("Trained model should exist");
+
+    let model = config.model.init_with::<B>(record).to_device(&device);
+
+    let label = item.label;
+    let batcher = MNISTBatcher::new(device);
+    let batch = batcher.batch(vec![item]);
+    let output = model.forward(batch.images);
+    let predicted = output.argmax(1).flatten::<1>(0, 1).into_scalar();
+
+    println!("Predicted {predicted} Expected {label}");
 }
